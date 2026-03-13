@@ -1,5 +1,9 @@
 pipeline {
     agent any
+    
+    triggers {
+        githubPush()
+    }
 
     environment {
         DOCKER_REGISTRY = 'docker.io'
@@ -23,13 +27,11 @@ pipeline {
     }
 
     stages {
-        stage('Checkout') {
+        stage("Git Checkout") {
             steps {
-                script {
-                    echo "Checking out code from repository..."
-                    checkout scm
-                    sh 'git rev-parse HEAD'
-                }
+                git branch: 'main',
+                    credentialsId: 'git-cred',
+                    url: 'https://github.com/trahulprabhu38/nexus-AgenticAI'
             }
         }
 
