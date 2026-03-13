@@ -38,14 +38,17 @@ pipeline {
         stage("SonarQube Analysis") {
             steps {
                 withSonarQubeEnv('sonarqube') {
-                    sh '''
-                    sonar-scanner \
-                      -Dsonar.projectKey=nexus-agentic-ai \
-                      -Dsonar.projectName="nexus-agentic-ai" \
-                      -Dsonar.sources=. \
-                      -Dsonar.language=py \
-                      -Dsonar.python.version=3
-                    '''
+                    script {
+                        def scannerHome = tool 'SonarQubeScanner'
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
+                              -Dsonar.projectKey=nexus-agentic-ai \
+                              -Dsonar.projectName=nexus-agentic-ai \
+                              -Dsonar.sources=. \
+                              -Dsonar.language=py \
+                              -Dsonar.python.version=3
+                        """
+                    }
                 }
             }
         }
