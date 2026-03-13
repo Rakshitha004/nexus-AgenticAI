@@ -39,7 +39,7 @@ pipeline {
             steps {
                 withSonarQubeEnv('sonarqube') {
                     script {
-                        def scannerHome = tool 'SonarQubeScanner'
+                        def scannerHome = tool 'sonarqube'
                         sh """
                             ${scannerHome}/bin/sonar-scanner \
                               -Dsonar.projectKey=nexus-agentic-ai \
