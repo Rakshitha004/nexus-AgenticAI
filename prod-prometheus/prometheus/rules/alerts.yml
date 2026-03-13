@@ -1,19 +1,55 @@
-groups:
-- name: system-alerts
-  rules:
+# groups:
 
-  - alert: HighCPUUsage
-    expr: avg by(instance)(rate(node_cpu_seconds_total{mode!="idle"}[2m])) * 100 > 80
-    for: 2m
-    labels:
-      severity: warning
-    annotations:
-      summary: "High CPU usage detected on {{ $labels.instance }}"
+#   - name: system-alerts
+#     rules:
+#       - alert: HighCPUUsage
+#         expr: avg by(instance)(rate(node_cpu_seconds_total{mode!="idle"}[2m])) * 100 > 80
+#         for: 2m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High CPU usage on {{ $labels.instance }}"
 
-  - alert: InstanceDown
-    expr: up == 0
-    for: 1m
-    labels:
-      severity: critical
-    annotations:
-      summary: Instance is down
+#       - alert: InstanceDown
+#         expr: up == 0
+#         for: 1m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "Instance {{ $labels.instance }} (job={{ $labels.job }}) is down"
+
+#   - name: nexus-microservices
+#     rules:
+#       - alert: ServiceDown
+#         expr: up{job=~"intent-agent|sql-query-generator|sql-validator"} == 0
+#         for: 1m
+#         labels:
+#           severity: critical
+#         annotations:
+#           summary: "Nexus service {{ $labels.job }} is unreachable"
+#           description: "Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}. Check NodePort accessibility."
+
+#       - alert: HighErrorRate
+#         expr: |
+#           sum by (job) (rate(http_requests_total{job=~"intent-agent|sql-query-generator|sql-validator", status_code=~"5.."}[5m]))
+#           /
+#           sum by (job) (rate(http_requests_total{job=~"intent-agent|sql-query-generator|sql-validator"}[5m]))
+#           * 100 > 5
+#         for: 2m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "High 5xx error rate on {{ $labels.job }}"
+#           description: "{{ $labels.job }} has a 5xx error rate above 5% for 2 minutes."
+
+#       - alert: HighLatencyP95
+#         expr: |
+#           histogram_quantile(0.95,
+#             sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~"intent-agent|sql-query-generator|sql-validator"}[5m]))
+#           ) > 2
+#         for: 3m
+#         labels:
+#           severity: warning
+#         annotations:
+#           summary: "P95 latency above 2s on {{ $labels.job }}"
+#           description: "{{ $labels.job }} p95 response time is {{ $value | humanizeDuration }}."

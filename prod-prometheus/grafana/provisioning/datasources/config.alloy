@@ -1,0 +1,104 @@
+// ============================================================
+// Grafana Alloy — config.alloy
+// Nexus AgenticAI  |  Docker Compose monitoring stack
+//
+// Collects logs from all Docker containers running on this VM
+// via the Docker socket and ships them to local Loki.
+// K8s pod logs are handled separately by the in-cluster
+// DaemonSet in kubernetes/monitoring/alloy-k8s-logforwarder.yaml
+// ============================================================
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+livedebugging {
+  enabled = true
+}
+
+// ──────────────────────────────────────────────────────────────
+// 1. Discover all local Docker containers
+// ──────────────────────────────────────────────────────────────
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+// ──────────────────────────────────────────────────────────────
+// 2. Relabel: extract useful labels from Docker metadata
+// ──────────────────────────────────────────────────────────────
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Strip leading slash:  /prometheus  →  prometheus
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  // Use compose service name as the 'service' label so Loki dashboards
+  // can filter by service name (prometheus, grafana, loki, alloy, cadvisor …)
+  rule {
+    source_labels = ["__meta_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// 3. Tail Docker container logs
+// ──────────────────────────────────────────────────────────────
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  forward_to    = [loki.process.containers.receiver]
+  relabel_rules = discovery.relabel.containers.rules
+}
+
+// ──────────────────────────────────────────────────────────────
+// 4. Enrich log lines before writing to Loki
+// ──────────────────────────────────────────────────────────────
+loki.process "containers" {
+
+  // Parse JSON-structured log lines to extract 'level' field
+  stage.json {
+    expressions = {
+      level   = "level",
+      message = "message",
+      msg     = "msg",
+    }
+  }
+
+  // Promote parsed 'level' to a Loki index label
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  // Drop blank lines
+  stage.drop {
+    expression          = "^\\s*$"
+    drop_counter_reason = "empty_line"
+  }
+
+  // Static labels on every log line from this VM
+  stage.static_labels {
+    values = {
+      env     = "production",
+      cluster = "monitoring-vm",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+// ──────────────────────────────────────────────────────────────
+// 5. Write to local Loki
+// ──────────────────────────────────────────────────────────────
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

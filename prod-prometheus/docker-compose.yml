@@ -7,6 +7,7 @@ networks:
 volumes:
   prometheus_data:
   grafana_data:
+  # alertmanager_data:
   loki_data:
 
 services:
@@ -30,7 +31,22 @@ services:
       - monitoring
     depends_on:
       - cadvisor
-      - node-exporter
+      #- node-exporter
+
+  # alertmanager:
+  #   image: prom/alertmanager:v0.27.0
+  #   container_name: alertmanager
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+  #     - alertmanager_data:/alertmanager
+  #   command:
+  #     - "--config.file=/etc/alertmanager/alertmanager.yml"
+  #     - "--storage.path=/alertmanager"
+  #   ports:
+  #     - "9093:9093"
+  #   networks:
+  #     - monitoring
 
   grafana:
     image: grafana/grafana:12.3.2
@@ -68,6 +84,36 @@ services:
     networks:
       - monitoring
 
+  # node-exporter:
+  #   image: prom/node-exporter:v1.7.0
+  #   container_name: node-exporter
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /proc:/host/proc:ro
+  #     - /sys:/host/sys:ro
+  #     - /:/rootfs:ro
+  #   command:
+  #     - "--path.procfs=/host/proc"
+  #     - "--path.sysfs=/host/sys"
+  #     - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+  #   ports:
+  #     - "9100:9100"
+  #   networks:
+  #     - monitoring
+
+  # blackbox-exporter:
+  #   image: prom/blackbox-exporter:v0.25.0
+  #   container_name: blackbox-exporter
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml
+  #   command:
+  #     - "--config.file=/etc/blackbox_exporter/config.yml"
+  #   ports:
+  #     - "9115:9115"
+  #   networks:
+  #     - monitoring
+
   pushgateway:
     image: prom/pushgateway:v1.7.0
     container_name: pushgateway
@@ -91,6 +137,20 @@ services:
     networks:
       - monitoring
 
+  # promtail:
+  #   image: grafana/promtail:2.9.4
+  #   container_name: promtail
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+  #     - /var/lib/docker/containers:/var/lib/docker/containers:ro
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #   command:
+  #     - "-config.file=/etc/promtail/promtail.yml"
+  #   networks:
+  #     - monitoring
+  #   depends_on:
+  #     - loki
 
   alloy:
     image: grafana/alloy:latest
@@ -99,14 +159,12 @@ services:
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock
-      # Mount your kubeconfig so Alloy can discover K8s pods.
-      # If your kubeconfig lives elsewhere, adjust the host path.
-      - ~/.kube/config:/etc/alloy/kubeconfig:ro
     command:
-      - run
+      - run 
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
+      
     ports:
       - "12345:12345"
       - "4317:4317"

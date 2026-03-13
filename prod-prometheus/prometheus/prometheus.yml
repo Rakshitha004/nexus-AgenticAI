@@ -15,68 +15,56 @@ rule_files:
 
 scrape_configs:
 
+  # ── Prometheus self ────────────────────────────────────────────────────────
   - job_name: prometheus
     static_configs:
       - targets: ["prometheus:9090"]
 
+  # ── Local monitoring VM containers ────────────────────────────────────────
   - job_name: cadvisor-local
     static_configs:
       - targets: ["cadvisor:8080"]
         labels:
           env: local
 
-  # Remote cAdvisor instances running on other VMs
-  # Replace the IPs below with your actual VM IPs
-  - job_name: cadvisor-remote
+  - job_name: node-exporter
     static_configs:
-      - targets: ["<VM1_IP>:8080"]
+      - targets: ["node-exporter:9100"]
+        labels:
+          env: local
+
+  # ── Remote K8s node  (185.197.251.236) ────────────────────────────────────
+  # cAdvisor running on the K8s node — container CPU/memory/network/disk metrics
+  - job_name: cadvisor-remote
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["185.197.251.236:8080"]
         labels:
           env: production
-          vm: vm1
+          vm: k8s-node
+
+  # Grafana Alloy running on the K8s node — agent health + log pipeline metrics
+  - job_name: alloy-k8s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["185.197.251.236:12345"]
+        labels:
+          env: production
+          vm: k8s-node
 
   # ── Nexus K8s microservices ────────────────────────────────────────────────
-  # Prometheus scrapes /metrics on each service via its NodePort.
-  #
-  # How to find the values to fill in:
-  #   K8S_NODE_IP  →  kubectl get nodes -o wide   (use INTERNAL-IP or EXTERNAL-IP)
-  #   NODEPORT     →  kubectl get svc -n default   (look at the PORT(S) column,
-  #                   e.g. "80:31234/TCP" means NodePort is 31234)
-  #
-  # The /metrics path is served by prometheus-fastapi-instrumentator on the
-  # container port, which is forwarded through the NodePort service unchanged.
-  # ──────────────────────────────────────────────────────────────────────────
+  # Fill in the NodePort values once you run:
+  #   kubectl get nodes -o wide       → K8S_NODE_IP
+  #   kubectl get svc -n default      → NodePort numbers (e.g. 80:31234/TCP)
 
-  - job_name: intent-agent
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["<K8S_NODE_IP>:<INTENT_AGENT_NODEPORT>"]
-        labels:
-          service: intent-agent
-          namespace: default
-          env: production
-
-  - job_name: sql-query-generator
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["<K8S_NODE_IP>:<SQL_QUERY_GEN_NODEPORT>"]
-        labels:
-          service: sql-query-generator
-          namespace: default
-          env: production
-
-  # Uncomment once the sql-validator service is deployed
   # - job_name: sql-validator
   #   metrics_path: /metrics
   #   static_configs:
-  #     - targets: ["<K8S_NODE_IP>:<SQL_VALIDATOR_NODEPORT>"]
+  #     - targets: ["185.197.251.236:<SQL_VALIDATOR_NODEPORT>"]
   #       labels:
   #         service: sql-validator
   #         namespace: default
   #         env: production
-
-  # - job_name: node-exporter
-  #   static_configs:
-  #     - targets: ["node-exporter:9100"]
 
   # - job_name: pushgateway
   #   honor_labels: true
