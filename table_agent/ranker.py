@@ -5,19 +5,18 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
 
 def _database_url() -> str:
-    url = os.getenv("AIML_RESULTS_DATABASE_URL", "").strip()
-    if not url:
-        raise RuntimeError(
-            "AIML_RESULTS_DATABASE_URL is not set. "
-            "Point it at the PostgreSQL database that has schema aiml_academic "
-            "(see results_aiml_normalized_postgres.sql)."
-        )
-    return url
+    # Use Postgres if set, but we will fallback to SQLite if Postgres is empty or missing
+    return os.getenv("AIML_RESULTS_DATABASE_URL", "").strip()
+
+
+def _sqlite_db_path() -> str:
+    return os.path.join("API_Integrations", "nexus_chat.sqlite")
 
 
 _SEM_WORDS = {
@@ -35,18 +34,35 @@ _SEM_WORDS = {
 def _infer_semesters(text: str) -> set[int]:
     t = text.lower()
     found: set[int] = set()
+    
+    # 1. Broad regex for "3rd", "3th", "sem 3", "3 sem", "3 semester"
+    patterns = [
+        r"(?:sem|semester|levels|s)\s*(\d+)\b",                    # sem 3, semester 3
+        r"\b(\d+)\s*(?:st|nd|rd|th)?\s*(?:sem|semester|levels|s)\b", # 3rd sem, 3 th sem
+        r"\b([1-8])\s*(?:st|nd|rd|th)\b"                             # 3rd, 4th (without 'sem')
+    ]
+    
+    for p in patterns:
+        for m in re.finditer(p, t):
+            try:
+                val = int(m.group(1))
+                if 1 <= val <= 8:
+                    found.add(val)
+            except ValueError: continue
+
+    # 2. Hardcoded phrase fallback (more strict)
     for n, phrases in _SEM_WORDS.items():
         for p in phrases:
-            if p in t:
+            # Avoid matching "2" as "2 sem" if it's just a digit in a year
+            if re.search(rf"\b{re.escape(p)}\b", t):
                 found.add(n)
                 break
-    m = re.search(r"sem(?:ester)?\s*(\d)", t)
-    if m:
-        found.add(int(m.group(1)))
+    
     return found
 
 
 def _infer_years(text: str) -> set[int]:
+    # Match any 4-digit academic year from 2010 to 2029
     return {int(x) for x in re.findall(r"\b(20[1-2]\d)\b", text)}
 
 
@@ -131,6 +147,7 @@ class RankedTable:
     score: float
     table_id: str
     source_file: str
+    db_type: str = "postgres"  # "postgres" or "sqlite"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -138,6 +155,7 @@ class RankedTable:
             "score": round(self.score, 4),
             "table_id": self.table_id,
             "source_file": self.source_file,
+            "db_type": self.db_type
         }
 
 
@@ -207,13 +225,23 @@ def score_row(query: str, row: dict[str, Any]) -> float:
     score = overlap * 1.2
 
     sem_q = _infer_semesters(query)
-    if sem_q and row.get("semester_no") is not None and int(row["semester_no"]) in sem_q:
-        score += 4.0
-
     years_q = _infer_years(query)
+
+    sem_match = False
+    if sem_q and row.get("semester_no") is not None and int(row["semester_no"]) in sem_q:
+        score += 8.0  # Increased boost
+        sem_match = True
+
+    year_match = False
     fy = row.get("source_folder_year")
     if years_q and fy is not None and int(fy) in years_q:
-        score += 3.0
+        score += 6.0  # Increased boost
+        year_match = True
+
+    # Bonus for BOTH semester and year matching
+    if sem_match and year_match:
+        score += 10.0
+
     if "batch" in query.lower() and years_q and row.get("study_year") is not None:
         if int(row["study_year"]) in years_q:
             score += 2.0
@@ -225,77 +253,103 @@ def score_row(query: str, row: dict[str, Any]) -> float:
 
 
 def rank_tables(query: str, top_k: int = 5) -> tuple[list[dict[str, Any]], str | None]:
-    if top_k < 1:
-        top_k = 1
-    if top_k > 50:
-        top_k = 50
+    if top_k < 1: top_k = 1
+    if top_k > 50: top_k = 50
 
-    sem_q = _infer_semesters(query)
-    years_q = _infer_years(query)
-    sem_list = sorted(sem_q) if sem_q else None
-    year_list = sorted(years_q) if years_q else None
-
-    conn = None
-    try:
-        conn = psycopg2.connect(_database_url())
-        rows = fetch_sessions(conn, semester_nos=sem_list, years=year_list)
-    except RuntimeError as e:
-        return [], str(e)
-    except Exception as e:
-        return [], f"Database error: {e}"
-    finally:
-        if conn is not None:
+    # 1. Try Postgres (AIML_RESULTS_DATABASE_URL)
+    pg_url = _database_url()
+    if pg_url:
+        try:
+            conn = psycopg2.connect(pg_url)
             try:
+                # Check if it has any rows
+                sem_q = _infer_semesters(query)
+                years_q = _infer_years(query)
+                rows = fetch_sessions(conn, semester_nos=list(sem_q), years=list(years_q))
+                if rows:
+                    return _process_pg_results(query, rows, top_k)
+            finally:
                 conn.close()
-            except Exception:
-                pass
+        except Exception as e:
+            print(f"Postgres failed or empty, falling back to SQLite: {e}")
 
-    if not rows:
-        if sem_q or years_q:
-            hint = []
-            if sem_q:
-                hint.append(f"semester(s) {sorted(sem_q)}")
-            if years_q:
-                hint.append(f"year(s) {sorted(years_q)}")
-            return [], (
-                "No result_sessions match " + " and ".join(hint) + ". Try different wording or check the DB."
-            )
-        return [], "No rows in aiml_academic.result_sessions (load the normalized SQL dump first)."
+    # 2. Fallback to SQLite (nexus_chat.sqlite)
+    return _rank_sqlite_tables(query, top_k)
 
+
+def _process_pg_results(query: str, rows: list[dict[str, Any]], top_k: int) -> tuple[list[dict[str, Any]], str | None]:
     candidates = _narrow_rows_for_query(rows, query)
-    if not candidates and (sem_q or years_q):
-        hint = []
-        if sem_q:
-            hint.append(f"semester(s) {sorted(sem_q)}")
-        if years_q:
-            hint.append(f"year(s) {sorted(years_q)}")
-        return [], "No result_sessions match " + " and ".join(hint) + ". Try different wording or check the DB."
+    if not candidates:
+        return [], "No matching results found in Postgres."
 
     scored: list[tuple[float, dict[str, Any]]] = []
     for row in candidates:
-        rdict = dict(row)
-        s = score_row(query, rdict)
-        scored.append((s, rdict))
+        s = score_row(query, row)
+        scored.append((s, row))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    max_s = scored[0][0] if scored else 0.0
-    if max_s <= 0:
-        max_s = 1.0
-        scored = [(max(0.01, s / 10.0), r) for s, r in scored]
-        max_s = max(x[0] for x in scored) or 1.0
-
-    out: list[RankedTable] = []
+    max_s = scored[0][0] if scored else 1.0
+    
+    out = []
     for s, r in scored[:top_k]:
         norm = min(1.0, s / max_s) if max_s else 0.0
         sid = r.get("session_id")
-        short = _short_table_label(r) or f"session_{sid}"
-        out.append(
-            RankedTable(
-                table=short,
-                score=norm,
-                table_id=_table_id_slug(r),
-                source_file=_source_file_display(r),
-            )
-        )
-
+        out.append(RankedTable(
+            table=_short_table_label(r) or f"session_{sid}",
+            score=norm,
+            table_id=_table_id_slug(r),
+            source_file=_source_file_display(r),
+            db_type="postgres"
+        ))
     return [x.as_dict() for x in out], None
+
+
+def _rank_sqlite_tables(query: str, top_k: int) -> tuple[list[dict[str, Any]], str | None]:
+    db_path = _sqlite_db_path()
+    if not os.path.exists(db_path):
+        return [], f"SQLite database not found at {db_path}"
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        tables = [row[0] for row in cur.fetchall()]
+        conn.close()
+
+        if not tables:
+            return [], "No tables found in SQLite database."
+
+        table_keywords = {
+            "Student": ["student", "roll", "name", "id", "sem"],
+            "Marks": ["mark", "result", "score", "grade", "performance", "exam"],
+            "Semester": ["sem", "semester", "academic", "level"],
+            "Subjects": ["subject", "course", "branch", "syllabus"],
+            "Timetable": ["time", "schedule", "class", "day", "room", "lecture"]
+        }
+
+        q_tokens = _tokens(query)
+        scored_tables = []
+        for tname in tables:
+            score = 0.0
+            if tname.lower() in query.lower(): score += 5.0
+            for k in table_keywords.get(tname, []):
+                if k in q_tokens: score += 2.0
+            if score > 0: scored_tables.append((score, tname))
+
+        scored_tables.sort(key=lambda x: x[0], reverse=True)
+        if not scored_tables and ("result" in query.lower() or "sem" in query.lower()):
+            scored_tables = [(5.0, "Marks"), (4.0, "Student"), (3.0, "Semester")]
+
+        out = []
+        for s, tname in scored_tables[:top_k]:
+            out.append(RankedTable(
+                table=tname,
+                score=1.0, # Simple 1.0 for matches
+                table_id=tname,
+                source_file=f"sqlite://{tname}",
+                db_type="sqlite"
+            ))
+        return [x.as_dict() for x in out], None
+
+    except Exception as e:
+        return [], f"SQLite error during ranking: {e}"

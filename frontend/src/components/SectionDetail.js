@@ -35,36 +35,44 @@ function SectionDetail() {
   }
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: 'linear-gradient(to bottom, #0f3460, #16213e)',
-      padding: '20px',
-      color: 'white'
-    }}>
-      <button
-        onClick={() => navigate('/dashboard')}
-        style={{
-          padding: '10px 20px',
-          backgroundColor: '#4CAF50',
-          color: 'white',
-          border: 'none',
-          borderRadius: '5px',
-          cursor: 'pointer',
-          marginBottom: '20px'
-        }}
-      >
-        Back to Dashboard
-      </button>
-      <h1 style={{ textAlign: 'center', marginBottom: '30px' }}>{data.title}</h1>
-      <div style={{
-        maxWidth: '800px',
-        margin: '0 auto',
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        padding: '30px',
-        borderRadius: '10px',
-        whiteSpace: 'pre-line'
-      }}>
-        {data.content}
+    <div className="glass-container" style={{ padding: '40px 24px' }}>
+      <div style={{ maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '32px' }}>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="glass-button secondary"
+            style={{ padding: '10px 20px', borderRadius: '30px' }}
+          >
+            ← Back to Dashboard
+          </button>
+        </div>
+
+        <div className="glass-card" style={{ padding: '40px', animation: 'slideIn 0.3s ease-out' }}>
+          <h1 style={{ 
+            fontSize: '2.5rem', 
+            marginBottom: '24px', 
+            fontWeight: 800,
+            background: 'linear-gradient(to right, var(--accent-primary), var(--accent-secondary))',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent'
+          }}>
+            {data.title}
+          </h1>
+          
+          <div style={{ 
+            fontSize: '1.1rem', 
+            lineHeight: '1.8', 
+            color: 'var(--text-main)',
+            whiteSpace: 'pre-line',
+            background: 'rgba(255, 255, 255, 0.03)',
+            padding: '24px',
+            borderRadius: '12px',
+            border: '1px solid var(--glass-border)'
+          }}>
+            {data.content}
+          </div>
+        </div>
       </div>
     </div>
   );

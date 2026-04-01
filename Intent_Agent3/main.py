@@ -19,6 +19,7 @@ from Intent_Agent3 import init_agents
 from Intent_Agent3.registry import dispatcher
 from Intent_Agent3.base import Message
 from table_agent.api import router as table_agent_router
+from column_pruning_agent.router import router as column_pruning_router
 
 # Folder to save intent classification JSONs
 INTENT_LOGS_DIR = os.path.join(
@@ -41,6 +42,7 @@ app.add_middleware(
 init_agents()
 
 app.include_router(table_agent_router, prefix="/table-agent", tags=["table-agent"])
+app.include_router(column_pruning_router, prefix="/column-pruning", tags=["column-pruning"])
 
 
 # ── Chat routes ──────────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ from Intent_Agent3.base import BaseAgent, Message
 # ---------------------------------------------------------------------------
 # Domain definitions
 # ---------------------------------------------------------------------------
-DOMAINS = ["placements", "results", "projects", "faculty", "syllabus", "accreditation"]
+DOMAINS = ["placements", "results", "projects", "faculty", "syllabus", "accreditation", "data_pruning"]
 
 # ---------------------------------------------------------------------------
 # Layer 1: Persona priors (contextual constraint)
@@ -33,18 +33,20 @@ PERSONA_PRIORS = {
     "student": {
         "results":       0.25,
         "syllabus":      0.25,
-        "projects":      0.20,
+        "projects":      0.15,
         "placements":    0.15,
         "faculty":       0.10,
         "accreditation": 0.05,
+        "data_pruning":  0.05,
     },
     "faculty": {
-        "syllabus":      0.25,
+        "syllabus":      0.20,
         "results":       0.20,
         "projects":      0.20,
         "faculty":       0.15,
         "accreditation": 0.10,
         "placements":    0.10,
+        "data_pruning":  0.05,
     },
     "parent": {
         "results":       0.30,
@@ -53,6 +55,7 @@ PERSONA_PRIORS = {
         "faculty":       0.10,
         "syllabus":      0.10,
         "projects":      0.05,
+        "data_pruning":  0.00,
     },
     "recruiter": {
         "placements":    0.35,
@@ -61,23 +64,21 @@ PERSONA_PRIORS = {
         "results":       0.10,
         "faculty":       0.10,
         "syllabus":      0.05,
+        "data_pruning":  0.00,
     },
     "default": {
-        "results":       0.17,
-        "syllabus":      0.17,
-        "projects":      0.17,
-        "placements":    0.17,
-        "faculty":       0.16,
-        "accreditation": 0.16,
+        "results":       0.15,
+        "syllabus":      0.15,
+        "projects":      0.15,
+        "placements":    0.15,
+        "faculty":       0.15,
+        "accreditation": 0.15,
+        "data_pruning":  0.10,
     },
 }
 
 # ---------------------------------------------------------------------------
 # Layer 2: Domain keyword stems and phrases (cross-modal alignment)
-#
-# Each keyword is stored as its root/stem so that "recruit" matches
-# "recruit", "recruiting", "recruitment", "recruiter", etc.
-# Multi-word phrases (e.g. "lab manual") are matched as substrings.
 # ---------------------------------------------------------------------------
 DOMAIN_KEYWORDS = {
     "placements": {
@@ -92,12 +93,16 @@ DOMAIN_KEYWORDS = {
     },
     "results": {
         "stems": [
-            "result", "grade", "marks", "cgpa", "sgpa", "score", "semester",
+            "result", "grade", "marks", "cgpa", "sgpa", "score", "semester", "sem", "usn",
             "exam", "pass", "fail", "rank", "topper", "gpa", "percent",
             "backlog", "revaluat", "marksheet", "transcript", "scorecard",
             "detained", "supple",
         ],
         "phrases": ["mark sheet", "grade card", "pass percentage"],
+    },
+    "data_pruning": {
+        "stems": ["prune", "column", "dataset", "filter", "feature", "select"],
+        "phrases": ["column pruning", "prune columns", "filter data"],
     },
     "projects": {
         "stems": [

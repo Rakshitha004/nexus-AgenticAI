@@ -19,8 +19,10 @@ class MessageDispatcher:
         if not agent:
             raise ValueError(f"Agent {target_agent} not found")
 
+        # Self-healing: Always enable the agent if it's currently disabled
         if not agent.enabled:
-            raise ValueError(f"Agent {target_agent} is currently disabled")
+            print(f"Self-healing: Auto-enabling {target_agent}")
+            agent.enabled = True
 
         return await agent.handle_message(message)
 

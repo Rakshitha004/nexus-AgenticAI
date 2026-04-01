@@ -63,7 +63,9 @@ class RouterAgent(BaseAgent):
                 text=message.text,
                 metadata=downstream_meta,
             )
-            result = await dispatcher.dispatch(enriched, "table_agent")
+            # Route to column_pruning_agent instead of table_agent, as it
+            # finds the table AND prunes the precise columns requested.
+            result = await dispatcher.dispatch(enriched, "column_pruning_agent")
             return Message(
                 sender=result.sender,
                 text=result.text,
@@ -77,6 +79,19 @@ class RouterAgent(BaseAgent):
                 metadata=downstream_meta,
             )
             result = await dispatcher.dispatch(enriched, "student_agent")
+            return Message(
+                sender=result.sender,
+                text=result.text,
+                metadata=meta,
+            )
+
+        if single == "data_pruning":
+            enriched = Message(
+                sender=message.sender,
+                text=message.text,
+                metadata=downstream_meta,
+            )
+            result = await dispatcher.dispatch(enriched, "column_pruning_agent")
             return Message(
                 sender=result.sender,
                 text=result.text,

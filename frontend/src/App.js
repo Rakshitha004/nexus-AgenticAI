@@ -3,6 +3,7 @@ import Home from './components/Home';
 import Login from './components/Login';
 import Chatbot from './components/Chatbot';
 import TableAgentPage from './components/TableAgent';
+import ColumnPruningPage from './components/ColumnPruningPage';
 import './App.css';
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/chatbot" element={<Chatbot />} />
           <Route path="/table-agent" element={<TableAgentPage />} />
+          <Route path="/column-pruning" element={<ColumnPruningPage />} />
         </Routes>
       </div>
     </Router>
