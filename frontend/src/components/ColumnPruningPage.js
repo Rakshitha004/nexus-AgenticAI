@@ -105,8 +105,16 @@ function ColumnPruningPage() {
 
         {/* Messages */}
         {error && (
-          <div className="glass-card" style={{ padding: '16px', background: 'rgba(239, 68, 68, 0.1)', borderColor: 'rgba(239, 68, 68, 0.2)', color: '#f87171' }}>
-            <strong>Error:</strong> {error}
+          <div className="glass-card" style={{ padding: '24px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', animation: 'shake 0.4s ease-in-out' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '1.5rem' }}>⚠️</span>
+              <strong style={{ color: '#fca5a5', fontSize: '1.1rem' }}>Database Error</strong>
+            </div>
+            <p style={{ color: '#fca5a5', margin: 0, lineHeight: 1.5 }}>
+              {error.includes("no columns") || error.includes("doesn't physically exist") 
+                ? "The matched table exists in metadata but is disconnected from the data source. Please ensure the PostgreSQL connection is active."
+                : error}
+            </p>
           </div>
         )}
 

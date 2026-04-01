@@ -262,7 +262,6 @@ def rank_tables(query: str, top_k: int = 5) -> tuple[list[dict[str, Any]], str |
         try:
             conn = psycopg2.connect(pg_url)
             try:
-                # Check if it has any rows
                 sem_q = _infer_semesters(query)
                 years_q = _infer_years(query)
                 rows = fetch_sessions(conn, semester_nos=list(sem_q), years=list(years_q))
@@ -271,16 +270,22 @@ def rank_tables(query: str, top_k: int = 5) -> tuple[list[dict[str, Any]], str |
             finally:
                 conn.close()
         except Exception as e:
-            print(f"Postgres failed or empty, falling back to SQLite: {e}")
+            # Only log if it's not a missing URL error
+            print(f"[table_agent] Postgres check failed: {e}")
 
     # 2. Fallback to SQLite (nexus_chat.sqlite)
+    # If the user mentioned "result" or "semester" but Postgres failed, we must be careful.
+    if ("result" in query.lower() or "sem" in query.lower()) and not pg_url:
+        print("[table_agent] Query mentions results but no PostgreSQL URL found. Falling back to local data.")
+
     return _rank_sqlite_tables(query, top_k)
 
 
 def _process_pg_results(query: str, rows: list[dict[str, Any]], top_k: int) -> tuple[list[dict[str, Any]], str | None]:
     candidates = _narrow_rows_for_query(rows, query)
     if not candidates:
-        return [], "No matching results found in Postgres."
+        # If we have rows but none match the specific filters, just use all rows
+        candidates = rows
 
     scored: list[tuple[float, dict[str, Any]]] = []
     for row in candidates:
@@ -288,11 +293,14 @@ def _process_pg_results(query: str, rows: list[dict[str, Any]], top_k: int) -> t
         scored.append((s, row))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    max_s = scored[0][0] if scored else 1.0
+    if not scored:
+        return [], "No matching results found in Postgres."
+        
+    max_s = scored[0][0]
     
     out = []
     for s, r in scored[:top_k]:
-        norm = min(1.0, s / max_s) if max_s else 0.0
+        norm = min(1.0, s / max_s) if max_s else 1.0
         sid = r.get("session_id")
         out.append(RankedTable(
             table=_short_table_label(r) or f"session_{sid}",
@@ -307,17 +315,17 @@ def _process_pg_results(query: str, rows: list[dict[str, Any]], top_k: int) -> t
 def _rank_sqlite_tables(query: str, top_k: int) -> tuple[list[dict[str, Any]], str | None]:
     db_path = _sqlite_db_path()
     if not os.path.exists(db_path):
-        return [], f"SQLite database not found at {db_path}"
+        return [], f"Database connection failed and local SQLite file not found at {db_path}"
 
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-        tables = [row[0] for row in cur.fetchall()]
+        db_tables = [row[0] for row in cur.fetchall()]
         conn.close()
 
-        if not tables:
-            return [], "No tables found in SQLite database."
+        if not db_tables:
+            return [], "No active sessions or tables found in the database."
 
         table_keywords = {
             "Student": ["student", "roll", "name", "id", "sem"],
@@ -329,7 +337,7 @@ def _rank_sqlite_tables(query: str, top_k: int) -> tuple[list[dict[str, Any]], s
 
         q_tokens = _tokens(query)
         scored_tables = []
-        for tname in tables:
+        for tname in db_tables:
             score = 0.0
             if tname.lower() in query.lower(): score += 5.0
             for k in table_keywords.get(tname, []):
@@ -337,14 +345,23 @@ def _rank_sqlite_tables(query: str, top_k: int) -> tuple[list[dict[str, Any]], s
             if score > 0: scored_tables.append((score, tname))
 
         scored_tables.sort(key=lambda x: x[0], reverse=True)
-        if not scored_tables and ("result" in query.lower() or "sem" in query.lower()):
-            scored_tables = [(5.0, "Marks"), (4.0, "Student"), (3.0, "Semester")]
+        
+        # Avoid returning hardcoded 'Marks' if it doesn't actually exist in SQLite
+        if not scored_tables:
+            # Only fallback to generic if the tables actually exist
+            available = set(db_tables)
+            if "Marks" in available or "Student" in available:
+                if "result" in query.lower() or "sem" in query.lower():
+                    scored_tables = [(5.0, t) for t in ["Marks", "Student", "Semester"] if t in available]
+
+        if not scored_tables:
+            return [], "No relevant tables found for your query in the current data source."
 
         out = []
         for s, tname in scored_tables[:top_k]:
             out.append(RankedTable(
                 table=tname,
-                score=1.0, # Simple 1.0 for matches
+                score=1.0, 
                 table_id=tname,
                 source_file=f"sqlite://{tname}",
                 db_type="sqlite"
@@ -352,4 +369,4 @@ def _rank_sqlite_tables(query: str, top_k: int) -> tuple[list[dict[str, Any]], s
         return [x.as_dict() for x in out], None
 
     except Exception as e:
-        return [], f"SQLite error during ranking: {e}"
+        return [], f"Local database error: {e}"

@@ -51,6 +51,15 @@ def fetch_table_columns(table_name: str) -> list[str]:
         return _fetch_sqlite_columns(real_name)
 
     # ── Postgres path ────────────────────────────────────────────────────
+    # First, check if it's a known session slug
+    session_id, view_type = _resolve_session_from_slug(table_name)
+    if session_id:
+        view_name = "v_student_subject_results" if view_type == "subject" else "v_student_semester_summary"
+        schema_cols = _fetch_postgres_columns(f"aiml_academic.{view_name}")
+        if schema_cols:
+            return schema_cols
+
+    # Direct table name fetch
     real_cols = _fetch_postgres_columns(table_name)
     if real_cols:
         return real_cols
@@ -64,7 +73,7 @@ def fetch_table_data(table_name: str, columns: list[str], query: str = "", limit
     if not columns:
         return []
 
-    # Extract simple filters from the query (e.g., "below 8 sgpa")
+    # Extract simple filters (e.g., "below 8 sgpa")
     filters_sql, params = _extract_numeric_filters(query, columns)
 
     # ── SQLite path ──────────────────────────────────────────────────────
@@ -74,6 +83,39 @@ def fetch_table_data(table_name: str, columns: list[str], query: str = "", limit
 
     # ── Postgres path ────────────────────────────────────────────────────
     return _fetch_postgres_data(table_name, columns, filters_sql, params, limit)
+
+
+def _resolve_session_from_slug(table_id: str) -> tuple[int | None, str]:
+    """Helper to find session_id and suggest view type from a table slug."""
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        from table_agent.ranker import _database_url
+    except ImportError:
+        return None, "semester"
+
+    url = _database_url()
+    if not url:
+        return None, "semester"
+
+    try:
+        import re
+        conn = psycopg2.connect(url)
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT session_id, source_relative_path, source_file_name FROM aiml_academic.result_sessions")
+                for s in cur.fetchall():
+                    rel = (s["source_relative_path"] or s["source_file_name"] or "").strip()
+                    slug = "aiml_" + re.sub(r"[^a-zA-Z0-9]+", "_", rel.replace("\\", "/")).strip("_").lower()
+                    if slug == table_id or f"session_{s['session_id']}" in table_id:
+                        # Determine if we should favor subject view
+                        vtype = "subject" if "result" in table_id.lower() or "marks" in table_id.lower() else "semester"
+                        return s["session_id"], vtype
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return None, "semester"
 
 
 def _extract_numeric_filters(query: str, available_columns: list[str]) -> tuple[str, list]:
@@ -87,31 +129,26 @@ def _extract_numeric_filters(query: str, available_columns: list[str]) -> tuple[
     params = []
     seen_columns = set()
 
-    # Mapping common names to actual DB columns (ordered by specificity)
+    # Mapping common names to actual DB columns
     mappings = [
         ("percentage", ["percentage"]),
         ("sgpa", ["sgpa"]),
-        ("cgpa", ["sgpa"]), # Alias for sgpa in this context
+        ("cgpa", ["sgpa"]), 
         ("marks", ["numeric_marks", "grand_total"]),
         ("score", ["numeric_marks", "sgpa"]),
         ("grade", ["grade_text"]),
     ]
 
-    # Operators
     ops = {
         r"\b(?:below|under|less than|<)\b": "<",
         r"\b(?:above|over|greater than|>)\b": ">",
         r"\b(?:equal to|=)\b": "=",
     }
 
-    # Iterate through operators first
     for op_regex, op_sql in ops.items():
-        # Look for "below 8" or "sgpa below 8"
         match = re.search(rf"{op_regex}\s*(\d*\.?\d+)", q)
         if match:
             val = float(match.group(1))
-            
-            # Find which column this filter applies to
             target_col = None
             for key, col_list in mappings:
                 if key in q or any(c in q for c in col_list):
@@ -120,8 +157,6 @@ def _extract_numeric_filters(query: str, available_columns: list[str]) -> tuple[
                         target_col = valid_cols[0]
                         break
             
-            # If no explicit column found, but we have a match like "< 8",
-            # default to 'sgpa' if available and valid looking.
             if not target_col and "sgpa" in available_columns and val <= 10:
                 target_col = "sgpa"
             
@@ -129,14 +164,9 @@ def _extract_numeric_filters(query: str, available_columns: list[str]) -> tuple[
                 filters.append(f'"{target_col}" {op_sql} %s')
                 params.append(val)
                 seen_columns.add(target_col)
-            
-            # Only handle one numeric filter per query for this heuristic
             break
     
-    if not filters:
-        return "", []
-    
-    return " AND ".join(filters), params
+    return (" AND ".join(filters), params) if filters else ("", [])
 
 
 def _fetch_postgres_data(table_id: str, columns: list[str], filter_sql: str, params: list, limit: int) -> list[dict]:
@@ -148,36 +178,24 @@ def _fetch_postgres_data(table_id: str, columns: list[str], filter_sql: str, par
         return []
 
     url = _database_url()
-    if not url:
-        return []
+    if not url: return []
+
+    session_id, _ = _resolve_session_from_slug(table_id)
 
     try:
         conn = psycopg2.connect(url)
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                # 1. Identify the session_id from the slug if it's a result table
-                cur.execute("SELECT session_id, source_relative_path, source_file_name FROM aiml_academic.result_sessions")
-                sessions = cur.fetchall()
-                
-                import re
-                target_sid = None
-                for s in sessions:
-                    rel = (s["source_relative_path"] or s["source_file_name"] or "").strip()
-                    slug = "aiml_" + re.sub(r"[^a-zA-Z0-9]+", "_", rel.replace("\\", "/")).strip("_").lower()
-                    if slug == table_id or f"session_{s['session_id']}" in table_id:
-                        target_sid = s["session_id"]
-                        break
-                
-                if target_sid is None:
-                    # Fallback to direct table name
+                if session_id is None:
+                    # Direct table/view name (if schema supplied)
                     if "." in table_id:
                         col_list = ", ".join([f'"{c}"' for c in columns])
-                        where_clause = f" WHERE {filter_sql}" if filter_sql else ""
-                        cur.execute(f'SELECT {col_list} FROM {table_id}{where_clause} LIMIT %s', (*params, limit))
+                        where = f" WHERE {filter_sql}" if filter_sql else ""
+                        cur.execute(f'SELECT {col_list} FROM {table_id}{where} LIMIT %s', (*params, limit))
                         return list(cur.fetchall())
                     return []
 
-                # 2. Determine view
+                # Use academic views
                 subject_cols = {"subject_code", "subject_label", "numeric_marks", "grade_text", "raw_result", "result_kind"}
                 use_subject_view = any(c in subject_cols for c in columns)
                 view_name = "v_student_subject_results" if use_subject_view else "v_student_semester_summary"
@@ -187,14 +205,14 @@ def _fetch_postgres_data(table_id: str, columns: list[str], filter_sql: str, par
                 actual_query_cols = [c for c in columns if c in view_cols]
                 
                 if not actual_query_cols:
-                    actual_query_cols = ["student_usn", "student_name"] # fallback
+                    actual_query_cols = ["student_usn", "student_name"] 
                 
                 col_sql = ", ".join([f'"{c}"' for c in actual_query_cols])
                 final_where = f"session_id = %s"
                 if filter_sql:
                     final_where += f" AND {filter_sql}"
                 
-                cur.execute(f'SELECT {col_sql} FROM aiml_academic.{view_name} WHERE {final_where} LIMIT %s', (target_sid, *params, limit))
+                cur.execute(f'SELECT {col_sql} FROM aiml_academic.{view_name} WHERE {final_where} LIMIT %s', (session_id, *params, limit))
                 return list(cur.fetchall())
         finally:
             conn.close()
@@ -213,12 +231,9 @@ def _fetch_sqlite_data(table_name: str, columns: list[str], filter_sql: str, par
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         col_sql = ", ".join([f'"{c}"' for c in columns])
-        
-        # SQLite uses ? instead of %s
         sqlite_filter = filter_sql.replace("%s", "?")
-        where_clause = f" WHERE {sqlite_filter}" if sqlite_filter else ""
-        
-        cur.execute(f'SELECT {col_sql} FROM "{table_name}"{where_clause} LIMIT ?', (*params, limit))
+        where = f" WHERE {sqlite_filter}" if sqlite_filter else ""
+        cur.execute(f'SELECT {col_sql} FROM "{table_name}"{where} LIMIT ?', (*params, limit))
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         return rows
@@ -228,7 +243,6 @@ def _fetch_sqlite_data(table_name: str, columns: list[str], filter_sql: str, par
 
 
 def _fetch_postgres_columns(table_name: str) -> list[str]:
-    """Try to fetch columns for a *real* Postgres table by name."""
     try:
         import psycopg2
         from table_agent.ranker import _database_url
@@ -236,28 +250,23 @@ def _fetch_postgres_columns(table_name: str) -> list[str]:
         return []
 
     url = _database_url()
-    if not url:
-        return []
+    if not url: return []
 
     try:
         conn = psycopg2.connect(url)
         try:
             with conn.cursor() as cur:
-                # Handles plain name or schema.name
                 if "." in table_name:
                     schema, tbl = table_name.split(".", 1)
                     cur.execute("""
-                        SELECT column_name
-                        FROM information_schema.columns
+                        SELECT column_name FROM information_schema.columns
                         WHERE table_schema = %s AND table_name = %s
                         ORDER BY ordinal_position
                     """, (schema, tbl))
                 else:
                     cur.execute("""
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_name = %s
-                        ORDER BY ordinal_position
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = %s ORDER BY ordinal_position
                     """, (table_name,))
                 return [row[0] for row in cur.fetchall()]
         finally:
@@ -268,27 +277,16 @@ def _fetch_postgres_columns(table_name: str) -> list[str]:
 
 
 def _fetch_sqlite_columns(table_name: str) -> list[str]:
-    """Internal helper to fetch columns from the local SQLite database."""
-    # Use absolute path relative to the project root
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     db_path = os.path.join(base_dir, "API_Integrations", "nexus_chat.sqlite")
-
-    if not os.path.exists(db_path):
-        print(f"[column_pruning] SQLite DB not found at: {db_path}")
-        return []
+    if not os.path.exists(db_path): return []
 
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
-        # Double-quote identifiers to handle mixed-case names like "Semester"
         cur.execute(f'PRAGMA table_info("{table_name}")')
-        rows = cur.fetchall()
-        cols = [row[1] for row in rows]
+        cols = [row[1] for row in cur.fetchall()]
         conn.close()
-
-        if not cols:
-            print(f"[column_pruning] No columns for SQLite table '{table_name}'.")
         return cols
-    except Exception as e:
-        print(f"[column_pruning] SQLite error for '{table_name}': {e}")
+    except Exception:
         return []
